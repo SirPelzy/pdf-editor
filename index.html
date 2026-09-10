@@ -59,10 +59,11 @@
 
     /* ====== Annotations ====== */
     .annotation { position: absolute; pointer-events: auto; }
-    .text-annotation { min-width: 40px; min-height: 24px; cursor: move; }
-    .text-annotation .text-content { padding: 4px 6px; border: 2px solid transparent; border-radius: 4px; outline: none; font-family: sans-serif; white-space: pre-wrap; word-break: break-word; background: transparent; min-width: 30px; min-height: 20px; }
+    .text-annotation { min-width: 40px; min-height: 24px; cursor: move; user-select: none; }
+    .text-annotation .text-content { padding: 4px 6px; border: 2px solid transparent; border-radius: 4px; outline: none; font-family: sans-serif; white-space: pre-wrap; word-break: break-word; background: transparent; min-width: 30px; min-height: 20px; cursor: move; user-select: none; }
     .text-annotation:hover .text-content, .text-annotation.selected .text-content { border-color: var(--primary); }
-    .text-annotation .text-content:focus { border-color: var(--primary); background: rgba(255,255,255,.7); }
+    .text-annotation.editing .text-content { border-color: var(--primary); background: rgba(255,255,255,.7); cursor: text; user-select: text; }
+    .text-annotation.editing { cursor: text; }
     .annotation .delete-btn { position: absolute; top: -10px; right: -10px; width: 22px; height: 22px; border-radius: 50%; background: var(--danger); color: #fff; border: 2px solid #fff; font-size: 12px; cursor: pointer; display: none; align-items: center; justify-content: center; line-height: 1; z-index: 10; }
     .annotation:hover .delete-btn { display: flex; }
     .sig-annotation { cursor: move; border: 2px solid transparent; border-radius: 4px; }
@@ -466,20 +467,39 @@
 
       const content = document.createElement('div');
       content.className = 'text-content';
-      content.contentEditable = state.activeTool === 'text' || state.activeTool === 'select';
+      content.contentEditable = 'false'; // OFF by default — double-click to edit
       content.style.fontSize = (data.fontSize * state.scale) + 'px';
       content.style.color = data.color;
       content.textContent = data.text || '';
-      content.addEventListener('blur', () => {
-        data.text = content.textContent;
-        div.classList.remove('selected');
+
+      // Double-click to enter edit mode
+      content.addEventListener('dblclick', e => {
+        e.stopPropagation();
+        div.classList.add('editing');
+        content.contentEditable = 'true';
+        content.focus();
+        // Select all text for easy replacement
+        const range = document.createRange();
+        range.selectNodeContents(content);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
       });
+
       content.addEventListener('input', () => {
         data.text = content.textContent;
       });
+
+      // Exit edit mode on blur
+      content.addEventListener('blur', () => {
+        data.text = content.textContent;
+        content.contentEditable = 'false';
+        div.classList.remove('editing');
+        div.classList.remove('selected');
+      });
+
+      // Sync toolbar when entering edit mode
       content.addEventListener('focus', () => {
-        els.annotationLayer.querySelectorAll('.annotation').forEach(a => a.classList.remove('selected'));
-        div.classList.add('selected');
         state.activeTextId = data.id;
         els.fontSizePicker.value = data.fontSize;
         els.colorPicker.value = data.color;
@@ -555,24 +575,23 @@
 
     // ===================== Drag & Resize =====================
     function setupDrag(el, data) {
-      let startX, startY, origX, origY, dragging = false, didMove = false;
-      const DRAG_THRESHOLD = 3;
+      let startX, startY, origX, origY, dragging = false;
       el.addEventListener('mousedown', e => {
         if (e.target.classList.contains('resize-handle') || e.target.classList.contains('delete-btn')) return;
-        // If text content is already focused for editing, let cursor positioning work
-        const textContent = el.querySelector('.text-content');
-        if (textContent && document.activeElement === textContent) return;
+        // If this text annotation is in edit mode, let the browser handle it
+        if (el.classList.contains('editing')) return;
 
+        e.preventDefault();
+        e.stopPropagation();
         dragging = true;
-        didMove = false;
         startX = e.clientX;
         startY = e.clientY;
         origX = data.x * state.scale;
         origY = data.y * state.scale;
-        // Deselect all others first
+        // Deselect all others, select this one
         els.annotationLayer.querySelectorAll('.annotation').forEach(a => a.classList.remove('selected'));
         el.classList.add('selected');
-        // Sync toolbar pickers to this annotation's values
+        // Sync toolbar pickers
         if (data.fontSize !== undefined) {
           state.activeTextId = data.id;
           els.fontSizePicker.value = data.fontSize;
@@ -583,29 +602,20 @@
 
         function onMove(e) {
           if (!dragging) return;
-          const dx = e.clientX - startX;
-          const dy = e.clientY - startY;
-          if (!didMove && Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD) return;
-          if (!didMove) { didMove = true; e.preventDefault(); }
-          const newLeft = origX + dx;
-          const newTop = origY + dy;
+          const newLeft = origX + (e.clientX - startX);
+          const newTop = origY + (e.clientY - startY);
           el.style.left = newLeft + 'px';
           el.style.top = newTop + 'px';
           data.x = newLeft / state.scale;
           data.y = newTop / state.scale;
         }
-        function onUp(e) {
+        function onUp() {
           dragging = false;
           document.removeEventListener('mousemove', onMove);
           document.removeEventListener('mouseup', onUp);
-          // If no drag happened, treat as click — focus text for editing
-          if (!didMove && textContent) {
-            textContent.focus();
-          }
         }
         document.addEventListener('mousemove', onMove);
         document.addEventListener('mouseup', onUp);
-        e.preventDefault();
       });
     }
 
@@ -814,7 +824,12 @@
 
       const el = createTextElement(data);
       const content = el.querySelector('.text-content');
-      setTimeout(() => content.focus(), 50);
+      // Immediately enter edit mode for new text
+      setTimeout(() => {
+        el.classList.add('editing');
+        content.contentEditable = 'true';
+        content.focus();
+      }, 50);
     }
 
     // ===================== Signature System =====================
